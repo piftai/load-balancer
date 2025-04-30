@@ -1,0 +1,6 @@
+port: 8080
+backends:
+  - url: "http://localhost:8000"
+    weight: 3
+  - url: "http://localhost:8001"
+    weight: 1
