@@ -8,6 +8,7 @@ import (
 	"net/url"
 )
 
+// Start is launch load-balancer server
 func Start(port string, loadBalancer balancer.Balancer) {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		backend := loadBalancer.Next()
