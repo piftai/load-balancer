@@ -12,8 +12,9 @@ type Backend struct {
 }
 
 type Config struct {
-	Port     string    `yaml:"port" default:"8080"`
-	Backends []Backend `yaml:"backends"`
+	Port       string    `yaml:"port" default:"8080"`
+	Backends   []Backend `yaml:"backends"`
+	HealthTick int       `yaml:"health_tick"`
 }
 
 func Load() Config {
