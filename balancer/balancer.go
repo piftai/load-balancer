@@ -44,34 +44,39 @@ func (b *Backend) HealthCheck() {
 	b.setAlive(resp.StatusCode < 400)
 }
 
-func HealthChecker(backends []*Backend, interval time.Duration) {
+func (wr *WRR) HealthChecker(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		var wg sync.WaitGroup
-		// todo ограничить число горутин
-		for _, backend := range backends {
-			wg.Add(1)
-			go func(b *Backend) {
-				defer wg.Done()
-				b.HealthCheck()
-				fmt.Printf("Backend %s is alive: %v\n", b.URL, b.isAlive())
-			}(backend)
+	for {
+		select {
+		case <-ticker.C:
+			var wg sync.WaitGroup
+			// todo ограничить число горутин
+			for _, backend := range wr.backends {
+				wg.Add(1)
+				go func(b *Backend) {
+					defer wg.Done()
+					b.HealthCheck()
+					fmt.Printf("Backend %s is alive: %v\n", b.URL, b.isAlive())
+				}(backend)
+			}
+
+			wg.Wait()
+		case <-wr.stopChan:
+			return
 		}
-
-		wg.Wait()
-
 	}
 }
 
-// WRR - Weighted Round Robin - алгоритм в
+// WRR - Weighted Round Robin - взвешенный алгоритм Round Robin(в IDEAS.MD вынес почему выбрал)
 type WRR struct {
 	backends []*Backend
 	mu       sync.RWMutex
 	index    int           // - индекс текущего бекенда
 	current  int           // - потраченный вес
 	stopChan chan struct{} // для graceful shutdown
+	GCD      int           // Greatest Common Divisor для нормализации веса
 }
 
 func New(backends []*Backend, healthInterval int) *WRR {
@@ -80,20 +85,35 @@ func New(backends []*Backend, healthInterval int) *WRR {
 		stopChan: make(chan struct{}),
 	}
 
-	go HealthChecker(w.backends, time.Duration(healthInterval)*time.Second)
+	w.calculateGCD()
+	go w.HealthChecker(time.Duration(healthInterval) * time.Second)
 
 	return w
 }
 
+func (wr *WRR) calculateGCD() {
+	gcd := wr.backends[0].Weight
+	for _, backend := range wr.backends {
+		gcd = gcdTwoNumbers(gcd, backend.Weight)
+	}
+	wr.GCD = gcd
+}
+
+func gcdTwoNumbers(a, b int) int { // gcd - greatest common divisor
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
+}
+
 func (wr *WRR) Next() *Backend {
-	// todo добавить нормализацию веса
 	wr.mu.RLock()
 	defer wr.mu.RUnlock()
 	for i := 0; i < len(wr.backends); i++ {
 		backend := wr.backends[wr.index]
 		wr.current++
 
-		if wr.current >= backend.Weight { // проверяем, истратили ли мы вес текущего бекенда, если да, то переходим на следующий
+		if wr.current >= (backend.Weight / wr.GCD) { // проверяем, истратили ли мы вес текущего бекенда, если да, то переходим на следующий
 			wr.current = 0                               // обнуляем вес для следующего бекенда
 			wr.index = (wr.index + 1) % len(wr.backends) // берем следующий бекенд
 		}
