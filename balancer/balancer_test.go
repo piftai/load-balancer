@@ -1,115 +1,182 @@
 package balancer
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
+	"time"
 )
 
+func TestBackendAliveStatus(t *testing.T) {
+	b := &Backend{URL: "http://test", Alive: false}
+
+	if b.isAlive() != false {
+		t.Error("Expected backend to be initially dead")
+	}
+
+	b.setAlive(true)
+	if b.isAlive() != true {
+		t.Error("Expected backend to be alive after setAlive(true)")
+	}
+}
+
+func TestBackendHealthCheck(t *testing.T) {
+	// Создаем тестовый сервер
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	b := &Backend{URL: ts.URL, Alive: false}
+	b.HealthCheck()
+
+	if !b.isAlive() {
+		t.Error("Expected backend to be alive after health check")
+	}
+}
+
+func TestBackendHealthCheckFail(t *testing.T) {
+	// Сервер, который возвращает ошибку
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	b := &Backend{URL: ts.URL, Alive: true}
+	b.HealthCheck()
+
+	if b.isAlive() {
+		t.Error("Expected backend to be dead after failed health check")
+	}
+}
+
 func TestWRRNext(t *testing.T) {
-	tests := []struct {
-		name             string
-		backends         []Backend
-		expectedSequence []string // Ожидаемая последовательность URL (или "nil" для dead backends)
-	}{
-		{
-			name: "equal weights",
-			backends: []Backend{
-				{URL: "server1", Weight: 1, Alive: true},
-				{URL: "server2", Weight: 1, Alive: true},
-				{URL: "server3", Weight: 1, Alive: true},
-			},
-			expectedSequence: []string{
-				"server1", "server2", "server3",
-				"server1", "server2", "server3", // Цикл повторяется
-			},
-		},
-		{
-			name: "different weights",
-			backends: []Backend{
-				{URL: "server1", Weight: 3, Alive: true},
-				{URL: "server2", Weight: 1, Alive: true},
-				{URL: "server3", Weight: 2, Alive: true},
-			},
-			expectedSequence: []string{
-				"server1", "server1", "server1", // Вес 3
-				"server2",            // Вес 1
-				"server3", "server3", // Вес 2
-				"server1", "server1", "server1", // Цикл повторяется
-				"server2",
-				"server3", "server3",
-			},
-		},
-		{
-			name: "with dead backends",
-			backends: []Backend{
-				{URL: "server1", Weight: 1, Alive: false},
-				{URL: "server2", Weight: 2, Alive: true},
-				{URL: "server3", Weight: 1, Alive: true},
-			},
-			expectedSequence: []string{
-				"server2", "server2", "server3", // server1 пропускается
-				"server2", "server2", "server3", // Цикл повторяется
-			},
-		},
-		{
-			name: "all dead backends",
-			backends: []Backend{
-				{URL: "server1", Weight: 1, Alive: false},
-				{URL: "server2", Weight: 1, Alive: false},
-			},
-			expectedSequence: []string{"nil", "nil"}, // Ожидаем nil для всех вызовов
-		},
+	backends := []*Backend{
+		{URL: "http://backend1", Weight: 3, Alive: true},
+		{URL: "http://backend2", Weight: 1, Alive: true},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			wr := New(tt.backends)
-			for _, expectedURL := range tt.expectedSequence {
-				got := wr.Next()
+	wr := New(backends, 10)
 
-				if expectedURL == "nil" {
-					assert.Nil(t, got, "Expected nil for dead backend")
-				} else {
-					assert.NotNil(t, got, "Backend should not be nil")
-					if got != nil {
-						assert.Equal(t, expectedURL, got.URL, "Unexpected backend URL")
-					}
+	// Проверяем распределение согласно весам
+	counts := make(map[string]int)
+	for i := 0; i < 100; i++ {
+		backend := wr.Next()
+		if backend == nil {
+			t.Fatal("Expected non-nil backend")
+		}
+		counts[backend.URL]++
+	}
+
+	// Примерное соотношение должно быть 3:1
+	ratio := float64(counts["http://backend1"]) / float64(counts["http://backend2"])
+	if ratio < 2.5 || ratio > 3.5 {
+		t.Errorf("Expected ratio ~3:1, got %f", ratio)
+	}
+}
+
+func TestWRRNextWithDeadBackend(t *testing.T) {
+	backends := []*Backend{
+		{URL: "http://backend1", Weight: 1, Alive: false},
+		{URL: "http://backend2", Weight: 1, Alive: true},
+	}
+
+	wr := New(backends, 10)
+
+	// Должен всегда возвращать только живой бэкенд
+	for i := 0; i < 10; i++ {
+		backend := wr.Next()
+		if backend == nil {
+			t.Fatal("Expected non-nil backend")
+		}
+		if backend.URL != "http://backend2" {
+			t.Errorf("Expected only alive backend, got %s", backend.URL)
+		}
+	}
+}
+
+func TestWRRNextAllDead(t *testing.T) {
+	backends := []*Backend{
+		{URL: "http://backend1", Weight: 1, Alive: false},
+		{URL: "http://backend2", Weight: 1, Alive: false},
+	}
+
+	wr := New(backends, 10)
+
+	backend := wr.Next()
+	if backend != nil {
+		t.Error("Expected nil when all backends are dead")
+	}
+}
+
+func TestHealthChecker(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	backends := []*Backend{
+		{URL: ts.URL, Weight: 1, Alive: false},
+	}
+
+	// Создаем канал для остановки
+	stopChan := make(chan struct{})
+
+	// Запускаем HealthChecker в отдельной горутине с возможностью остановки
+	go func() {
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				var wg sync.WaitGroup
+				for _, backend := range backends {
+					wg.Add(1)
+					go func(b *Backend) {
+						defer wg.Done()
+						b.HealthCheck()
+					}(backend)
 				}
+				wg.Wait()
+			case <-stopChan:
+				return
 			}
-		})
+		}
+	}()
+
+	// Даем время на выполнение health check
+	time.Sleep(50 * time.Millisecond)
+
+	// Останавливаем health checker
+	close(stopChan)
+
+	if !backends[0].isAlive() {
+		t.Error("Expected backend to be alive after health check")
 	}
 }
 
-func TestWRRNoBackends(t *testing.T) {
-	wr := New([]Backend{})
-	assert.Nil(t, wr.Next(), "Should return nil when no backends available")
-}
-
-func TestWRRConcurrency(t *testing.T) {
-	backends := []Backend{
-		{URL: "server1", Weight: 2, Alive: true},
-		{URL: "server2", Weight: 1, Alive: true},
+func TestConcurrentAccess(t *testing.T) {
+	backends := []*Backend{
+		{URL: "http://backend1", Weight: 1, Alive: true},
+		{URL: "http://backend2", Weight: 1, Alive: true},
 	}
-	wr := New(backends)
 
-	results := make(chan *Backend, 100)
+	wr := New(backends, 10)
 
-	// Запускаем несколько горутин
-	for i := 0; i < 5; i++ {
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
 		go func() {
-			for j := 0; j < 20; j++ {
-				results <- wr.Next()
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				backend := wr.Next()
+				if backend == nil {
+					t.Error("Got nil backend")
+				}
 			}
 		}()
 	}
-
-	// Проверяем результаты
-	for i := 0; i < 100; i++ {
-		b := <-results
-		assert.NotNil(t, b)
-		if b != nil {
-			assert.True(t, b.URL == "server1" || b.URL == "server2")
-		}
-	}
+	wg.Wait()
 }

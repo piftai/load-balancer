@@ -13,6 +13,19 @@ type Backend struct {
 	URL    string
 	Weight int
 	Alive  bool
+	mu     sync.RWMutex
+}
+
+func (b *Backend) isAlive() bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.Alive
+}
+
+func (b *Backend) setAlive(alive bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.Alive = alive
 }
 
 func (b *Backend) HealthCheck() {
@@ -22,13 +35,13 @@ func (b *Backend) HealthCheck() {
 	resp, err := client.Get(b.URL) // будем считать, что запрос по root url равноценен запросу /health
 	if err != nil {
 		log.Printf("Health check. Backend %v not answering", b.URL)
-		b.Alive = false
+		b.setAlive(false)
 		return
 	}
 	defer resp.Body.Close()
 
 	// Считаем бэкенд живым, если статус код 2xx или 3xx
-	b.Alive = resp.StatusCode < 400
+	b.setAlive(resp.StatusCode < 400)
 }
 
 func HealthChecker(backends []*Backend, interval time.Duration) {
@@ -37,13 +50,13 @@ func HealthChecker(backends []*Backend, interval time.Duration) {
 
 	for range ticker.C {
 		var wg sync.WaitGroup
-
+		// todo ограничить число горутин
 		for _, backend := range backends {
 			wg.Add(1)
 			go func(b *Backend) {
 				defer wg.Done()
 				b.HealthCheck()
-				fmt.Printf("Backend %s is alive: %v\n", b.URL, b.Alive)
+				fmt.Printf("Backend %s is alive: %v\n", b.URL, b.isAlive())
 			}(backend)
 		}
 
@@ -52,6 +65,7 @@ func HealthChecker(backends []*Backend, interval time.Duration) {
 	}
 }
 
+// WRR - Weighted Round Robin - алгоритм в
 type WRR struct {
 	backends []*Backend
 	mu       sync.RWMutex
@@ -72,6 +86,7 @@ func New(backends []*Backend, healthInterval int) *WRR {
 }
 
 func (wr *WRR) Next() *Backend {
+	// todo добавить нормализацию веса
 	wr.mu.RLock()
 	defer wr.mu.RUnlock()
 	for i := 0; i < len(wr.backends); i++ {
@@ -83,7 +98,7 @@ func (wr *WRR) Next() *Backend {
 			wr.index = (wr.index + 1) % len(wr.backends) // берем следующий бекенд
 		}
 
-		if backend.Alive { // если жив, возвращаем сразу же его
+		if backend.isAlive() { // если жив, возвращаем сразу же его
 			return backend
 		}
 
