@@ -17,7 +17,7 @@
 go mod download
 ```
 
-2. Создайте конфиг (`configs/config.yaml`):
+2. Создайте конфиг (`config.yaml`):
 ```yaml
 port: 8080
 backends:
