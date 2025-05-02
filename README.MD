@@ -76,18 +76,7 @@ curl -X POST http://localhost:8080/clients \
 for i in {1..5}; do curl http://localhost:8080; done
 ```
 
-## Структура проекта
 
-```
-.
-├── cmd/           # Главный исполняемый файл
-├── configs/       # Конфигурация
-├── internal/      # Основная логика
-│   ├── balancer/  # Логика балансировки
-│   ├── server/    # HTTP обработчики
-│   └── ...        # Другие модули
-├── test_servers/  # Тестовые бэкенды
-└── README.md
 ```
 
 ## Тестирование
