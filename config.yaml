@@ -8,3 +8,11 @@ health_tick: 12
 rate_limiting:
   default_capacity: 10  # Макс. количество запросов
   default_rate: 1       # 10 запросов в секунду
+database:
+  postgres:
+    host: "localhost"
+    port: 8010
+    user: "postgres"
+    password: "postgres"
+    dbname: "postgres"
+    sslmode: "disable"

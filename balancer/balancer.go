@@ -44,6 +44,16 @@ func (b *Backend) HealthCheck() {
 	b.setAlive(resp.StatusCode < 400)
 }
 
+// WRR - Weighted Round Robin - взвешенный алгоритм Round Robin(в IDEAS.MD вынес почему выбрал)
+type WRR struct {
+	backends []*Backend
+	mu       sync.RWMutex
+	index    int           // - индекс текущего бекенда
+	current  int           // - потраченный вес
+	stopChan chan struct{} // для graceful shutdown
+	GCD      int           // Greatest Common Divisor для нормализации веса
+}
+
 func (wr *WRR) HealthChecker(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -69,14 +79,8 @@ func (wr *WRR) HealthChecker(interval time.Duration) {
 	}
 }
 
-// WRR - Weighted Round Robin - взвешенный алгоритм Round Robin(в IDEAS.MD вынес почему выбрал)
-type WRR struct {
-	backends []*Backend
-	mu       sync.RWMutex
-	index    int           // - индекс текущего бекенда
-	current  int           // - потраченный вес
-	stopChan chan struct{} // для graceful shutdown
-	GCD      int           // Greatest Common Divisor для нормализации веса
+func (wr *WRR) Stop() {
+	close(wr.stopChan) // Останавливаем health checker
 }
 
 func New(backends []*Backend, healthInterval int) *WRR {

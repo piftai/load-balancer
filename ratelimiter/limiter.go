@@ -1,19 +1,20 @@
 package ratelimiter
 
 import (
+	"log"
 	"sync"
 	"time"
 )
 
 type TokenBucket struct {
-	capacity   int           // максимальное кол-во токенов в одном бакете
-	tokens     int           // текущее кол-во токенов
-	rate       time.Duration // интервал между добавлениями токенов
-	lastUpdate time.Time     // время последнего обновления бакета
+	capacity   int       // максимальное кол-во токенов в одном бакете
+	tokens     int       // текущее кол-во токенов
+	rate       int       // интервал между добавлениями токенов
+	lastUpdate time.Time // время последнего обновления бакета
 	mu         sync.Mutex
 }
 
-func NewTokenBucket(capacity int, rate time.Duration) *TokenBucket {
+func NewTokenBucket(capacity int, rate int) *TokenBucket {
 	return &TokenBucket{
 		capacity:   capacity,
 		tokens:     capacity, // начинаем с полного бакета
@@ -27,7 +28,7 @@ func (tb *TokenBucket) Allow() bool {
 	defer tb.mu.Unlock()
 
 	elapsed := time.Since(tb.lastUpdate).Seconds()
-	tokensToAdd := int(elapsed * tb.rate.Seconds())
+	tokensToAdd := int(elapsed * float64(tb.rate))
 
 	if tokensToAdd > 0 {
 		tb.tokens = min(tb.tokens+tokensToAdd, tb.capacity) // если кол-во токенов которое нужно добавить больше, чем capacity, то добавим просто размер capacity
@@ -44,9 +45,13 @@ func (tb *TokenBucket) Allow() bool {
 type ClientLimiter struct {
 	buckets         map[string]*TokenBucket
 	defaultCapacity int
-	defaultRate     time.Duration
+	defaultRate     int
 	mu              sync.RWMutex
 	stopChan        chan struct{}
+}
+
+func (c *ClientLimiter) Stop() {
+	close(c.stopChan)
 }
 
 func (c *ClientLimiter) refillBuckets() {
@@ -66,11 +71,14 @@ func (c *ClientLimiter) refillBuckets() {
 				bucket.mu.Unlock()
 			}
 			c.mu.RUnlock()
+		case <-c.stopChan:
+			log.Println("Rate limiter stopped gracefully")
+			return
 		}
 	}
 }
 
-func NewClientLimiter(defaultCapacity int, defaultRate time.Duration) *ClientLimiter {
+func NewClientLimiter(defaultCapacity int, defaultRate int) *ClientLimiter {
 	c := ClientLimiter{
 		buckets:         make(map[string]*TokenBucket), // todo может стоит добавить по дефолту для 10 клиентов
 		defaultCapacity: defaultCapacity,
