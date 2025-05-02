@@ -17,5 +17,5 @@ func main() {
 		})
 	}
 	loadBalancer := balancer.New(backends, cfg.HealthTick)
-	server.Start(cfg.Port, loadBalancer)
+	server.Start(cfg, loadBalancer)
 }

@@ -11,10 +11,16 @@ type Backend struct {
 	Weight int    `yaml:"weight"`
 }
 
+type RateLimitingConfig struct {
+	DefaultCapacity int `yaml:"default_capacity"`
+	DefaultRate     int `yaml:"default_rate"` // запросов в секунду
+}
+
 type Config struct {
-	Port       string    `yaml:"port" default:"8080"`
-	Backends   []Backend `yaml:"backends"`
-	HealthTick int       `yaml:"health_tick"`
+	Port         string             `yaml:"port" default:"8080"`
+	Backends     []Backend          `yaml:"backends"`
+	HealthTick   int                `yaml:"health_tick"`
+	RateLimiting RateLimitingConfig `yaml:"rate_limiting"`
 }
 
 func Load() Config {

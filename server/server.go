@@ -2,10 +2,13 @@ package server
 
 import (
 	"github.com/piftai/load-balancer/balancer"
+	"github.com/piftai/load-balancer/config"
 	"github.com/piftai/load-balancer/proxy"
+	"github.com/piftai/load-balancer/ratelimiter"
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -15,8 +18,19 @@ type Balancer interface {
 }
 
 // Start is launch load-balancer server
-func Start(port string, loadBalancer Balancer) {
+func Start(cfg config.Config, loadBalancer Balancer) {
+	limiter := ratelimiter.NewClientLimiter(cfg.RateLimiting.DefaultCapacity, time.Duration(cfg.RateLimiting.DefaultRate*1000))
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		clientID := r.Header.Get("\"X-Client-ID\"")
+		if clientID == "" {
+			clientID = strings.Split(r.RemoteAddr, ":")[0]
+		}
+		if !limiter.Allow(clientID) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte("No tokens"))
+			log.Println("Dont have tokens left clientID:", clientID)
+			return
+		}
 		backend := loadBalancer.Next()
 		if backend == nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -29,5 +43,5 @@ func Start(port string, loadBalancer Balancer) {
 		prx.ServeHTTP(w, r)
 	})
 
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	log.Fatal(http.ListenAndServe(":"+cfg.Port, nil))
 }
